@@ -20,7 +20,9 @@ class TaskAction {
         if($data['department_id'])                          $model->department_id = $data['department_id'];
         if($data['position'])                               $model->position = $data['position'];
         if($data['checking_account'])                       $model->checking_account = $data['checking_account'];
+        if($data['accountant_id'])                          $model->accountant_id = $data['accountant_id'];
         if($data['comment'])                                $model->comment = $data['comment'];
+        if($data['over_budget'])                            $model->over_budget = $data['over_budget']; else $model->over_budget = 0;
         if($data['city_start_id'])                          $model->city_start_id = $data['city_start_id'];
         if($data['city_final_id'])                          $model->city_final_id = $data['city_final_id'];
         if($data['date_start'])                             $model->date_start = $data['date_start'];
@@ -67,12 +69,13 @@ class TaskAction {
         return $model;
     }
 
-    public static function listGrid($models){
+    public static function listGrid($models, $user_id){
         return $models
             ->get()
-            ->map(function($item){
+            ->map(function($item) use ($user_id) {
 
                 $responsible = User::find($item->responsible_id)->full_name;
+                $accountant  = User::find($item->accountant_id)->full_name;
                 $company     = Company::find($item->company_id)->NAME;
                 $department  = Department::find($item->department_id)->NAME;
 
@@ -94,6 +97,7 @@ class TaskAction {
                     'status'            => [['value' => Translate::translate($item->status)]],
                     'status_eng'        => [['value' => $item->status]],
                     'responsible'       => [['value' => $responsible]],
+                    'accountant'        => [['value' =>  $accountant]],
                     'company'           => [['value' => $company]],
                     'department'        => [['value' => $department]],
                     'position'          => [['value' => $item->position]],
@@ -103,51 +107,104 @@ class TaskAction {
                     'date_final'        => [['value' => $item->date_final->format('d.m.Y')]],
                     'dots'              =>  $dots,
                     'date_created'      => [['value' => $item->created_at->format('d.m.Y')]],
+                    'full_access'       => [['value' => Verifications::checkFullAccess($user_id, $item->responsible_id)]],
+                    'over_budget'       => [['value' => $item->over_budget ? 'Да' : 'Нет']],
+                    'auto_travel'       => [['value' => $item->auto_travel ? 'Да' : 'Нет']],
                 ];
             });
     }
 
-    public static function detailTask($model){
+    public static function detailTask($model, $user_id){
 
-        $auto_travel = $model->auto_travel;
-        $limit_litr  = $model->date_start->format('m') < 10 && $model->date_final->format('m') > 3 ? 0.1 : 0.12;
-        $gasoline    = $model->gasoline;
+        $auto_travel   = $model->auto_travel;
+        $over_budget   = $model->over_budget;
+        $limit_litr    = $model->date_start->format('m') < 10 && $model->date_final->format('m') > 3 ? 0.1 : 0.12;
+        $gasoline      = $model->gasoline;
 
-        $date_start  = $model->date_start;
-        $date_final  = $model->date_final;
-        $count_days  = (($date_final->getTimestamp() - $date_start->getTimestamp() ) / 86400 ) + 1;
+        $company       = Company::find($model->company_id)->NAME;
+        $FIO           = User::find($model->responsible_id)->full_name;
+        $department    = Department::find($model->department_id)->NAME;
+        $accountant    = User::find($model->accountant_id)->full_name;
 
-        $cityModel   = City::find($model->city_start_id);
-        $city_start  = $cityModel->name  . ' (' . $cityModel->region . ')';
+        $date_start    = $model->date_start;
+        $date_final    = $model->date_final;
+        $count_days    = (($date_final->getTimestamp() - $date_start->getTimestamp() ) / 86400 ) + 1;
 
-        $cityModel   = City::find($model->city_start_id);
-        $city_final  = $cityModel->name  . ' (' . $cityModel->region . ')';
+        $cityModel     = City::find($model->city_start_id);
+        $city_start    = $cityModel->name  . ' (' . $cityModel->region . ')';
 
-        $task = [
-            ['name' => 'ФИО пользователя',  'value' => User::find($model->responsible_id)->full_name],
-            ['name' => 'Организация',       'value' => Company::find($model->company_id)->NAME],
-            ['name' => 'Подразделение',     'value' => Department::find($model->department_id)->NAME],
-            ['name' => 'Должность',         'value' => $model->position],
-            ['name' => 'Расчетный счет',    'value' => $model->checking_account],
-            ['name' => 'Комментарий',       'value' => $model->comment],
-            ['name' => '',                  'value' => ''],
+        $cityModel     = City::find($model->city_start_id);
+        $city_final    = $cityModel->name  . ' (' . $cityModel->region . ')';
 
-            ['name' => 'Город отъезда',     'value' => $city_start],
-            ['name' => 'Дата отъезда',      'value' => $model->date_start->format('d.m.Y')],
-            ['name' => 'Город возврата',    'value' => $city_final],
-            ['name' => 'Дата возврата',     'value' => $model->date_final->format('d.m.Y')],
+        $data_link_doc = json_decode($model->document_link) ? json_decode($model->document_link) : [];
+
+        $cancel_comment   = $model->cancel_comment;
+
+        $full_access   =Verifications::checkFullAccess($user_id, $model->responsible_id);
+
+        $additional_files = [
+            'file'        => [],
+            'file_save'   => [],
+            'file_exists' => [],
         ];
 
-        if ($auto_travel){
-            $agreement = null;
-            $vicarious = null;
+        foreach ($model->files as $file) {
+            if ($file->type == 'additional') {
+                $additional_files['file_save'][]   = ['id' => $file->id, 'name'  => $file->original_name, 'type' => $file->type_file];
+                $additional_files['file_exists'][] = ['id' => $file->id, 'name'  => $file->original_name, 'type' => $file->type_file];
+            }
+        }
+
+        $task = [
+            ['name' => 'ФИО пользователя',      'value' => $FIO,                                'name_eng' => 'FIO'],
+            ['name' => 'Организация',           'value' => $company],
+            ['name' => 'Подразделение',         'value' => $department],
+            ['name' => 'Должность',             'value' => $model->position],
+            ['name' => 'Расчетный счет',        'value' => $model->checking_account],
+            ['name' => 'Комментарий',           'value' => $model->comment],
+            ['name' => 'Бухгалтер, отвечающий за финансовую отчетность', 'value' => $accountant],
+            ['name' => '',                      'value' => ''],
+
+            ['name' => 'Город отъезда',         'value' => $city_start,                         'name_eng' => 'city_start'],
+            ['name' => 'Дата отъезда',          'value' => $model->date_start->format('d.m.Y'), 'name_eng' => 'date_start'],
+            ['name' => 'Город возврата',        'value' => $city_final,                         'name_eng' => 'city_final'],
+            ['name' => 'Дата возврата',         'value' => $model->date_final->format('d.m.Y'), 'name_eng' => 'date_final'],
+            ['name' => 'Причина аннулирования', 'value' => $cancel_comment ?: '-'],
+        ];
+
+        if($over_budget){
+            $over_budget = '-';
             foreach ($model->files as $file){
-                if ($file->type == 'agreement' ){
+                if ($file->type == 'over_budget'){
+                    $str = $file->id.',\''.$file->translated_name.'.' . $file->type_file . '\'';
+                    $over_budget = '<span class="businessTrip_vicarious"><a onclick="businessTripLoadFile('.$str.')" href="#'.$file->id.'">'.$file->original_name.'</a></span>';
+                };
+
+            }
+            $over_budget = [
+                ['name' => '', 'value' => ''],
+                ['name' => 'Файл командировки согласования со сверх бюджетом', 'value' => $over_budget],
+            ];
+
+            $task = array_merge($task, $over_budget);
+
+        }
+
+
+        if ($auto_travel){
+            $agreement   = '-';
+            $vicarious   = '-';
+
+            foreach ($model->files as $file){
+                if ($file->type == 'agreement'){
                     $str = $file->id.',\''.$file->translated_name.'.' . $file->type_file . '\'';
                     $agreement = '<span class="businessTrip_vicarious"><a onclick="businessTripLoadFile('.$str.')" href="#'.$file->id.'">'.$file->original_name.'</a></span>';
-                } else {
+                } elseif ($file->type == 'vicarious') {
                     $str = $file->id.',\''.$file->translated_name.'.' . $file->type_file . '\'';
                     $vicarious = '<span class="businessTrip_vicarious"><a onclick="businessTripLoadFile('.$str.')" href="#'.$file->id.'">'.$file->original_name.'</a></span>';
+                } elseif ($file->type == 'over_budget'){
+                    $str = $file->id.',\''.$file->translated_name.'.' . $file->type_file . '\'';
+                    $over_budget = '<span class="businessTrip_vicarious"><a onclick="businessTripLoadFile('.$str.')" href="#'.$file->id.'">'.$file->original_name.'</a></span>';
                 }
             }
             $auto_travel = [
@@ -163,7 +220,9 @@ class TaskAction {
         };
 
         $dots         = $model->dots->sortBy('sort')->values()->all();
+
         $dots_to_send = [];
+        $dots_to_plan_report_not = '';
         $route_sheet  = [];
         $city_alive   = '';
         $total_GSM    = 0;
@@ -187,8 +246,8 @@ class TaskAction {
                     'route'     => $route,
                     'type'      => 'Трансфер',
                     'km_days'   => $dot->distance . ' км.',
-                    'gasoline'  => $gasoline . ' руб.',
-                    'sum'       => round($sum_1,2) . ' руб.'
+                    'gasoline'  => $gasoline,
+                    'sum'       => round($sum_1,2),
                 ];
 
                 $route_sheet[] = [
@@ -196,8 +255,8 @@ class TaskAction {
                     'route'     => $dot->city->name . ' (' . $dot->city->region . ')',
                     'type'      => 'Движение по городу ' . $pop,
                     'km_days'   => $dot->days .' дн.',
-                    'gasoline'  => $gasoline . ' руб.',
-                    'sum'       => round($sum_2, 2) . ' руб.'
+                    'gasoline'  => $gasoline,
+                    'sum'       => round($sum_2, 2)
                 ];
 
                 if($idx == count($model->dots) - 1){
@@ -209,11 +268,11 @@ class TaskAction {
                         'route'     => $dot->city->name . ' (' . $dot->city->region . ')' . ' - ' . $city_final,
                         'type'      => 'Трансфер',
                         'km_days'   => $model->back_distance . ' км.',
-                        'gasoline'  => $gasoline . ' руб.',
-                        'sum'       => round($sum_3, 2) . ' руб.'
+                        'gasoline'  => $gasoline,
+                        'sum'       => round($sum_3, 2)
                     ];
 
-                    $route_sheet[] = ['number'=> 'Всего', 'sum' => round($total_GSM, 2) . ' руб.'];
+                    $route_sheet[] = ['number'=> 'Всего', 'sum' => round($total_GSM, 2)];
                 }
 
                 $city_alive = $dot->city->name . ' (' . $dot->city->region . ')';
@@ -236,6 +295,10 @@ class TaskAction {
                 'info'      => $info,
                 'targets'   => $targets,
             ];
+
+            $dots_to_plan_report_not = $dots_to_plan_report_not ?
+                $dots_to_plan_report_not . ' - ' . $dot->city->name . ' (' . $dot->city->region . ')' :
+                $dots_to_plan_report_not . $dot->city->name . ' (' . $dot->city->region . ')';
         };
 
         $estimate = [];
@@ -273,14 +336,30 @@ class TaskAction {
             ];
         }
 
+        $plan_report_not = [
+            'company'    => $company,
+            'route'      => $city_start . ' - ' . $city_final,
+            'department' => $department,
+            'FIO'        => $model->position . ', ' . $FIO,
+            'period'     => $date_start->format('d.m.Y') . ' - ' . $date_final->format('d.m.Y'),
+            'dots'       => $dots_to_plan_report_not,
+            'target'     => $model->comment,
+        ];
+
         return [
             'status'            => $model->status,
+            'count_days'        => $count_days,
             'auto_travel'       => $model->auto_travel,
+            'over_budget'       => $model->over_budget,
             'task'              => $task,
             'dots'              => $dots_to_send,
             'route_sheet'       => $route_sheet,
             'estimate'          => $estimate,
-            'total_estimate'    => round($total_estimate, 2)
+            'total_estimate'    => round($total_estimate, 2),
+            'data_link_doc'     => $data_link_doc,
+            'additional_files'  => $additional_files,
+            'plan_report_not'   => $plan_report_not,
+            'full_access'       => $full_access,
         ];
     }
 }

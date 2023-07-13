@@ -26,7 +26,51 @@ class TargetController extends Controller {
     }
 
     public function add(Request $request){
-        return response()->json(['status' => 'success']);
+        if(!$request->name || !$request->description || !is_integer($request->active))
+            return response()->json(['status' => 'error', 'message' => 'Возникла ошибка']);
+
+        DB::beginTransaction();
+        try {
+            $newTarget = new Target();
+            if($request->name)        $newTarget->name        = $request->name;
+            if($request->description) $newTarget->description = $request->description;
+            if($request->active)      $newTarget->active      = $request->active; else $newTarget->active = 0;
+            if($request->user_id)     $newTarget->user_id     = $request->user_id;
+
+            $newTarget->save();
+            $target_id = $newTarget->id;
+
+            DB::commit();
+            return response()->json(['status' => 'success', 'message' => 'Успешно', '$target_id'=> $target_id]);
+
+        } catch (\Exception $e){
+            DB::rollBack();
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function edit(Request $request){
+        if(!$request->id || !$request->name || !$request->description || !is_integer($request->active))
+            return response()->json(['status' => 'error', 'message' => 'Возникла ошибка']);
+        $target_id = $request->id;
+
+        DB::beginTransaction();
+        try {
+            $editTraget = Target::find($target_id);
+            if($request->name)        $editTraget->name        = $request->name;
+            if($request->description) $editTraget->description = $request->description;
+            if($request->active)      $editTraget->active      = $request->active; else $editTraget->active = 0;
+            if($request->user_id)     $editTraget->user_id     = $request->user_id;
+
+            $editTraget->save();
+
+            DB::commit();
+            return response()->json(['status' => 'success', 'message' => 'Успешно', 'target_id'=> $target_id]);
+
+        } catch (\Exception $e){
+            DB::rollBack();
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()]);
+        }
     }
 
     public function active(Request $request){
@@ -47,12 +91,23 @@ class TargetController extends Controller {
     }
 
     public function get(Request $request){
-        $targets = Target::where('active',1)->get();
 
-        $targets = $targets->map(function($item){
-            return ['value' => $item->id, 'label' => $item->name];
-        });
+        if($request->all){
+            $targets = Target::where('active',1)->get();
 
-        return response()->json(['status' => 'success', 'data' => $targets]);
+            $targets = $targets->map(function($item){
+                return ['value' => $item->id, 'label' => $item->name];
+            });
+            return response()->json(['status' => 'success', 'data' => $targets]);
+
+        }else{
+            $target_id = $request->target_id;
+
+            if(!$target_id)
+                return response()->json(['status' => 'error', 'message' => 'Возникла ошибка']);
+
+            $targetModel = Target::find($target_id);
+            return response()->json(['status' => 'success', 'data' => $targetModel]);
+        }
     }
 }

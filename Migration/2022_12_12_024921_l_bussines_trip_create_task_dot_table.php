@@ -10,9 +10,9 @@ class CreateLBusinessTripTaskDot extends Migration {
             $table->id();
             $table->integer('city_id');
             $table->integer('task_id');
-            $table->integer('days');
+            $table->float('days');
             $table->integer('sort');
-            $table->integer('distance')->nullable();
+            $table->float('distance')->nullable();
             $table->timestamps();
         });
     }

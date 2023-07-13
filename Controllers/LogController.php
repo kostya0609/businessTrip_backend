@@ -16,12 +16,14 @@ class LogController extends Controller {
 
         $logModels = Log::where('task_id','=',$request->task_id)->with('user')->orderBy('id', 'desc')->get();
 
+
+
         $data = $logModels->map(function($item){
             return [
                 'date' => $item->date,
                 'event' => $item->event,
                 'user' =>  [
-                    'link'=>"https://bitrix.bsi.local/company/personal/user/$item->user->ID/",
+                    'link'=>"https://bitrix.bsi.local/company/personal/user/{$item->user->ID}/",
                     'photo'=> "https://bitrix.bsi.local/".$item->user->getPhoto()
                 ]
             ];

@@ -11,7 +11,8 @@ class FileAction{
         $original = str_replace('.' . $file->getClientOriginalExtension(),
             '', $file->getClientOriginalName());
         $translated = Str::slug($original, '_');
-        $hash = md5($translated . date('YmdHis'));
+
+        $hash = md5($translated . date('YmdHis') . $type);
 
         $file->move(app_path() . $dir, $hash);
 
@@ -29,9 +30,11 @@ class FileAction{
 
     public static function deleteFile($task_id, $type){
         $file = File::where([ ['task_id', '=', $task_id], ['type', '=', $type] ])->first();
-        if(file_exists(app_path() . $file->dir . '/' . $file->hash_name)){
-            unlink(app_path() . $file->dir . '/' . $file->hash_name);
-            $file->delete();
+        if($file){
+            if(file_exists(app_path() . $file->dir . '/' . $file->hash_name)){
+                unlink(app_path() . $file->dir . '/' . $file->hash_name);
+                $file->delete();
+            }
         }
     }
 }

@@ -1,0 +1,835 @@
+<?
+namespace Bsi\Wt;
+
+use \Bitrix\Highloadblock as HL;
+use \Bitrix\Main\Entity;
+use CIBlockSection;
+use CUser;
+use \LOL\Workflow\FavoriteDocumentsTable;
+use \Bitrix\Main\Config\Configuration;
+
+class WorkfolowRest {
+
+    public function addDoc($IBLOCK_ID,$CATEGORY_ID,$STATUS_ID,$DEADLINE = false,$CATEGORY_NAME = '',$TASK_DATA){
+
+        \CModule::IncludeModule('highloadblock');
+        \CModule::IncludeModule('lol.workflow');
+        \CModule::IncludeModule('bsi.system');
+        \CModule::IncludeModule("iblock");
+        \CModule::IncludeModule("bizproc");
+        if(!\CModule::IncludeModule('lists')){
+            ShowError(GetMessage("CC_BLEE_MODULE_NOT_INSTALLED"));
+            return;
+        }
+
+        require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/iblock/admin_tools.php");
+
+        $TASK_ID        = $TASK_DATA['TASK_ID'];
+        $USER_ID        = $TASK_DATA['USER_ID'];
+        $ROUTE_LIST     = $TASK_DATA['ROUTE_LIST'];
+        $DATE_START     = $TASK_DATA['DATE_START'];
+        $DATE_FINAL     = $TASK_DATA['DATE_FINAL'];
+        $USER_FULL_NAME = $TASK_DATA['USER_FULL_NAME'];
+        $POSITION_NAME  = $TASK_DATA['POSITION_NAME'];
+        $ACCOUNTANT_ID  = $TASK_DATA['ACCOUNTANT_ID'];
+
+
+        $obList = new \CList($IBLOCK_ID);
+        $data = [];
+        $arResult["FIELDS"] = $obList->GetFields();
+        foreach($arResult["FIELDS"] as $FIELD_ID => $arField) {
+            if($obList->is_field($FIELD_ID)) {
+                if ($FIELD_ID == "NAME") {
+                    if (!$ELEMENT_ID || $copy_id) {
+                        foreach (GetModuleEvents("lol.workflow", "OnDocumentGenerateName", true) as $arEvent)
+                            ExecuteModuleEventEx($arEvent, array($IBLOCK_ID, &$data[$FIELD_ID]));
+                    }
+                }
+            }
+        }
+
+        $rsUser=\Bitrix\Main\UserTable::getList(array(
+            "filter"=>array("ID"=>$USER_ID),
+            "select"=>array("ID", "UF_DEPARTMENT")
+        ));
+        $arUser=$rsUser->fetch();
+
+        $depId=intval($arUser["UF_DEPARTMENT"][0]);
+        $rsUserDep=\CIBlockSection::GetList(array(), array("ID"=>$depId));
+        $arUserDep=$rsUserDep->Fetch();
+
+        $rsRoute=\CIBlockElement::GetList(array(), array(
+            "IBLOCK_ID"=>74,
+            "PROPERTY_DEPARTMENT"=>$arUserDep["ID"], //доп фильтр по департаменту.
+            "PROPERTY_CATEGORY"=>$CATEGORY_ID
+        ));
+
+        if(!($obRoute=$rsRoute->GetNextElement()))
+        {
+            $arrDep=array();
+            $rsDep=\CIBlockSection::GetNavChain(5, $arUserDep["ID"]);
+            while($arDep=$rsDep->Fetch())
+            {
+                array_unshift($arrDep, $arDep);
+            }
+            foreach($arrDep as $arDep)
+            {
+                $rsRoute=\CIBlockElement::GetList(array("SORT"=>"ASC", "ID"=>"ASC"), array(
+                    "IBLOCK_ID"=>74,
+                    //"ACTIVE"=>"Y",
+                    "PROPERTY_DEPARTMENT"=>$arDep["ID"],
+                    "PROPERTY_CATEGORY"=>$CATEGORY_ID
+                ));
+                if($obRoute=$rsRoute->GetNextElement())
+                    break;
+            }
+        }
+
+
+        if(!$obRoute) { // && !$USER->IsAdmin()
+
+            return false;
+
+        } else if ($obRoute->fields['ACTIVE'] == 'N') {
+
+            $arErrors = "Маршрут отменен";
+
+            echo json_encode(array(
+                "errors"=>$arErrors
+            ));
+
+            return false;
+
+        }
+
+
+        $arRoute=$obRoute->GetFields();
+        $arRoute["PROPERTIES"]=$obRoute->GetProperties();
+
+        $arApproveUsers1=array();
+        foreach($arRoute["PROPERTIES"]["APPROVEROLES1"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arApproveUsers1[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arApproveUsers1));
+                }
+            }
+        }
+        if(is_array($arRoute["PROPERTIES"]["APPROVEUSERS1"]["VALUE"]))
+            $arApproveUsers1=array_merge($arApproveUsers1, $arRoute["PROPERTIES"]["APPROVEUSERS1"]["VALUE"]);
+
+        $arApproveUsers1Full=array();
+        foreach($arApproveUsers1 as $iUser)
+        {
+            $rsUser2=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arUser2=$rsUser2->fetch();
+            $arApproveUsers1Full[]=array(
+                "id"=>$arUser2["ID"],
+                "name"=>\CUser::FormatName(CSite::GetNameFormat(false), $arUser2, false, false),
+                "position"=>$arUser2["WORK_POSITION"]
+            );
+        }
+
+        $arApproveUsers2=array();
+        foreach($arRoute["PROPERTIES"]["APPROVEROLES2"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arApproveUsers2[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arApproveUsers2));
+                }
+
+            }
+        }
+        if(is_array($arRoute["PROPERTIES"]["APPROVEUSERS2"]["VALUE"]))
+            $arApproveUsers2=array_merge($arApproveUsers2, $arRoute["PROPERTIES"]["APPROVEUSERS2"]["VALUE"]);
+
+        $arApproveUsers2Full=array();
+        foreach($arApproveUsers2 as $iUser)
+        {
+            $rsUser2=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arUser2=$rsUser2->fetch();
+            $arApproveUsers2Full[]=array(
+                "id"=>$arUser2["ID"],
+                "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+                "position"=>$arUser2["WORK_POSITION"]
+            );
+        }
+
+        $arApproveUsers3=array();
+        foreach($arRoute["PROPERTIES"]["APPROVEROLES3"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arApproveUsers3[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arApproveUsers3));
+                }
+            }
+        }
+        if(is_array($arRoute["PROPERTIES"]["APPROVEUSERS3"]["VALUE"]))
+            $arApproveUsers3=array_merge($arApproveUsers3, $arRoute["PROPERTIES"]["APPROVEUSERS3"]["VALUE"]);
+
+        $arApproveUsers3Full=array();
+        foreach($arApproveUsers3 as $iUser)
+        {
+            $rsUser2=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arUser2=$rsUser2->fetch();
+            $arApproveUsers3Full[]=array(
+                "id"=>$arUser2["ID"],
+                "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+                "position"=>$arUser2["WORK_POSITION"]
+            );
+        }
+
+        $arSignerUsers=false;
+        if(intval($arRoute["PROPERTIES"]["SIGNERROLE"]["VALUE"]))
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>intval($arRoute["PROPERTIES"]["SIGNERROLE"]["VALUE"])), false, false, array("ID","PROPERTY_USER", "CODE"));
+            if($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arSignerUsers=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    $arSignerUsers2=array();
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arSignerUsers2));
+                    if(count($arSignerUsers2))
+                        $arSignerUsers=$arSignerUsers2[0];
+                }
+            }
+        }
+        if(intval($arRoute["PROPERTIES"]["SIGNERUSER"]["VALUE"]))
+            $arSignerUsers=$arRoute["PROPERTIES"]["SIGNERUSER"]["VALUE"];
+
+
+        $rsUser2=\Bitrix\Main\UserTable::getList(array(
+            "filter"=>array("ID"=>$arSignerUsers),
+            "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+        ));
+
+        $arSignerUsersFull= ($arUser2=$rsUser2->fetch()) ? array(
+            "id"=>$arUser2["ID"],
+            "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+            "position"=>$arUser2["WORK_POSITION"]
+        ) : false;
+
+        $arAddresseeUsers=array();
+        foreach($arRoute["PROPERTIES"]["ADDRESSEEROLE"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arAddresseeUsers[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arAddresseeUsers));
+                }
+            }
+        }
+        if(is_array($arRoute["PROPERTIES"]["ADDRESSEEUSER"]["VALUE"]))
+            $arAddresseeUsers=array_merge($arAddresseeUsers, $arRoute["PROPERTIES"]["ADDRESSEEUSER"]["VALUE"]);
+
+        $arAddresseeUsersFull=array();
+        foreach($arAddresseeUsers as $iUser)
+        {
+            $rsUser2=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arUser2=$rsUser2->fetch();
+            $arAddresseeUsersFull[]=array(
+                "id"=>$arUser2["ID"],
+                "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+                "position"=>$arUser2["WORK_POSITION"]
+            );
+
+        }
+
+        $arInfoUsers=array();
+        foreach($arRoute["PROPERTIES"]["INFOROLE"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arInfoUsers[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arInfoUsers));
+                }
+            }
+        }
+
+        if(!is_array($arRoute["PROPERTIES"]["INFOUSER"]["VALUE"])){
+            $arRoute["PROPERTIES"]["INFOUSER"]["VALUE"]=[];
+        }
+
+        $arInfoUsers = array_merge($arInfoUsers, $arRoute["PROPERTIES"]["INFOUSER"]["VALUE"]);
+        foreach($arInfoUsers as $iUser)
+        {
+            $rsUser=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arInfoUser = $rsUser->fetch();
+            $arInfoUsersFull[]=array(
+                "id"=>$arInfoUser["ID"],
+                "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arInfoUser, false, false),
+                "position"=>$arInfoUser["WORK_POSITION"]
+            );
+        }
+
+        $arRegisterUsers=array();
+        foreach($arRoute["PROPERTIES"]["REGISTERROLE"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arRegisterUsers[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arRegisterUsers));
+                }
+            }
+        }
+        if(is_array($arRoute["PROPERTIES"]["REGISTERUSER"]["VALUE"]))
+            $arRegisterUsers=array_merge($arRegisterUsers, $arRoute["PROPERTIES"]["REGISTERUSER"]["VALUE"]);
+
+        $arRegisterUsersFull=array();
+        foreach($arRegisterUsers as $iUser)
+        {
+            $rsUser2=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arUser2=$rsUser2->fetch();
+            $arRegisterUsersFull[]=array(
+                "id"=>$arUser2["ID"],
+                "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+                "position"=>$arUser2["WORK_POSITION"]
+            );
+
+        }
+
+
+        $arWatchUsers=array();
+        foreach($arRoute["PROPERTIES"]["WATCHROLE"]["VALUE"] as $iVal)
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>$iVal), false, false, array("ID","PROPERTY_USER", "CODE"));
+            while($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arWatchUsers[]=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arWatchUsers));
+                }
+            }
+        }
+        if(is_array($arRoute["PROPERTIES"]["WATCHUSER"]["VALUE"]))
+            $arWatchUsers=array_merge($arWatchUsers, $arRoute["PROPERTIES"]["WATCHUSER"]["VALUE"]);
+
+        $arWatchUsersFull=array();
+        foreach($arWatchUsers as $iUser)
+        {
+            $rsUser2=\Bitrix\Main\UserTable::getList(array(
+                "filter"=>array("ID"=>$iUser),
+                "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+            ));
+            $arUser2=$rsUser2->fetch();
+            $arWatchUsersFull[]=array(
+                "id"=>$arUser2["ID"],
+                "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+                "position"=>$arUser2["WORK_POSITION"]
+            );
+
+        }
+
+        /* Manager */
+
+        $arManagerUsers=false;
+        if(intval($arRoute["PROPERTIES"]["MANAGERROLE"]["VALUE"]))
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>intval($arRoute["PROPERTIES"]["MANAGERROLE"]["VALUE"])), false, false, array("ID","PROPERTY_USER", "CODE"));
+            if($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arManagerUsers=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    $arManagerUsers2=array();
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arManagerUsers2));
+                    if(count($arManagerUsers2))
+                        $arManagerUsers=$arManagerUsers2[0];
+                }
+            }
+        }
+        if(intval($arRoute["PROPERTIES"]["MANAGERUSER"]["VALUE"]))
+            $arManagerUsers=$arRoute["PROPERTIES"]["MANAGERUSER"]["VALUE"];
+
+        $rsUser2=\Bitrix\Main\UserTable::getList(array(
+            "filter"=>array("ID"=>$arManagerUsers),
+            "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+        ));
+
+        $arManagerUsersFull= ($arUser2=$rsUser2->fetch()) ? array(
+            "id"=>$arUser2["ID"],
+            "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+            "position"=>$arUser2["WORK_POSITION"]
+        ) : false;
+
+        /* End Manager */
+
+        /* Performer */
+
+        $arPerformerUsers=false;
+        if(intval($arRoute["PROPERTIES"]["PERFORMERROLE"]["VALUE"]))
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>intval($arRoute["PROPERTIES"]["PERFORMERROLE"]["VALUE"])), false, false, array("ID","PROPERTY_USER", "CODE"));
+            if($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arPerformerUsers=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    $arPerformerUsers2=array();
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arPerformerUsers2));
+                    if(count($arPerformerUsers2))
+                        $arPerformerUsers=$arPerformerUsers2[0];
+                }
+            }
+        }
+        if(intval($arRoute["PROPERTIES"]["PERFORMERUSER"]["VALUE"]))
+            $arPerformerUsers=$arRoute["PROPERTIES"]["PERFORMERUSER"]["VALUE"];
+
+        $rsUser2=\Bitrix\Main\UserTable::getList(array(
+            "filter"=>array("ID"=>$arPerformerUsers),
+            "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+        ));
+        $arPerformerUsersFull=($arUser2=$rsUser2->fetch()) ? array(
+            "id"=>$arUser2["ID"],
+            "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+            "position"=>$arUser2["WORK_POSITION"]
+        ) : false;
+
+        /* End Performer */
+
+        /* CoPerformer */
+
+        $arCoperformerUsers=false;
+        if(intval($arRoute["PROPERTIES"]["COPERFORMERROLE"]["VALUE"]))
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>intval($arRoute["PROPERTIES"]["COPERFORMERROLE"]["VALUE"])), false, false, array("ID","PROPERTY_USER", "CODE"));
+            if($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arCoperformerUsers=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    $arCoperformerUsers2=array();
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arCoperformerUsers2));
+                    if(count($arCoperformerUsers2))
+                        $arCoperformerUsers=$arCoperformerUsers2[0];
+                }
+            }
+        }
+        if(intval($arRoute["PROPERTIES"]["COPERFORMERUSER"]["VALUE"]))
+            $arCoperformerUsers=$arRoute["PROPERTIES"]["COPERFORMERUSER"]["VALUE"];
+
+        $rsUser2=\Bitrix\Main\UserTable::getList(array(
+            "filter"=>array("ID"=>$arCoperformerUsers),
+            "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+        ));
+        $arCoperformerUsersFull=($arUser2=$rsUser2->fetch()) ? array(
+            "id"=>$arUser2["ID"],
+            "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+            "position"=>$arUser2["WORK_POSITION"]
+        ) : false;
+
+        /* End CoPerformer */
+
+        /* Controller */
+
+        $arControllerUsers=false;
+        if(intval($arRoute["PROPERTIES"]["CONTROLLERROLE"]["VALUE"]))
+        {
+            $rsRole=\CIBlockElement::GetList(array(), array("IBLOCK_ID"=>73, "ACTIVE"=>"Y", "ID"=>intval($arRoute["PROPERTIES"]["CONTROLLERROLE"]["VALUE"])), false, false, array("ID","PROPERTY_USER", "CODE"));
+            if($arRole=$rsRole->Fetch())
+            {
+                if(intval($arRole["PROPERTY_USER_VALUE"]))
+                    $arControllerUsers=$arRole["PROPERTY_USER_VALUE"];
+                else
+                {
+                    $arControllerUsers2=array();
+                    foreach(GetModuleEvents("lol.workflow", "OnCategorySelectRole", true) as $arEvent)
+                        ExecuteModuleEventEx($arEvent, array($arRole, $arUser, $arRoute, &$arControllerUsers2));
+                    if(count($arControllerUsers2))
+                        $arControllerUsers=$arControllerUsers2[0];
+                }
+            }
+        }
+
+        if(intval($arRoute["PROPERTIES"]["CONTROLLERUSER"]["VALUE"]))
+            $arControllerUsers=$arRoute["PROPERTIES"]["CONTROLLERUSER"]["VALUE"];
+
+        $rsUser2=\Bitrix\Main\UserTable::getList(array(
+            "filter"=>array("ID"=>$arControllerUsers),
+            "select"=>array("ID", "WORK_POSITION", "LAST_NAME", "NAME", "SECOND_NAME")
+        ));
+        $arControllerUsersFull= ($arUser2=$rsUser2->fetch()) ? array(
+            "id"=>$arUser2["ID"],
+            "name"=>\CUser::FormatName(\CSite::GetNameFormat(false), $arUser2, false, false),
+            "position"=>$arUser2["WORK_POSITION"]
+        ) : false;
+
+        /* End Controller */
+
+        $arWatchUsersFullID = [];
+        foreach ($arWatchUsersFull as $id)
+            $arWatchUsersFullID[] = $id['id'];
+
+        if(!$DEADLINE)
+            $DEADLINE = ConvertTimeStamp(time()+intval($arRoute["PROPERTIES"]["DEADLINE"]["VALUE"])*86400, "FULL");
+
+        $detailText = $arRoute["DETAIL_TEXT"];
+
+        if($CATEGORY_ID == 9785585){
+            $detailText = 'Отчитаться по исполнению плана командировки '.$ROUTE_LIST.' с '.$DATE_START.' по '.$DATE_FINAL;
+        }elseif($CATEGORY_ID == 23949486){
+            $detailText = 'Сдать авансовый отчет за командировку в бухгалтерию. ФИО сотрудника  : '.$USER_FULL_NAME;
+        }elseif($CATEGORY_ID == 9785590){
+            $detailText = 'Подготовить документы. Командировка '.$ROUTE_LIST.' '.$POSITION_NAME.', '.$USER_FULL_NAME.' с '.$DATE_START.' по '.$DATE_FINAL;
+        }elseif($CATEGORY_ID == 9785615){
+            $detailText = 'Заказ денег. Командировка '.$ROUTE_LIST.' '.$POSITION_NAME.', '.$USER_FULL_NAME.' с '.$DATE_START.' по '.$DATE_FINAL;
+        }
+
+        $arElement = [
+            'IBLOCK_ID' => $IBLOCK_ID,
+            'NAME' => $data['NAME'],
+            'DETAIL_TEXT_TYPE' => 'html',
+            'DETAIL_TEXT' => $detailText .'<br> Ссылка на задание - <a href="/business-trip/tasks/detail/'.$TASK_ID.'/task">/business-trip/tasks/detail/'.$TASK_ID.'/task</a>',
+            'MODIFIED_BY' => $USER_ID,
+            'DATE_CREATE' => date('d.m.Y H:i:s'),
+            'PROPERTY_VALUES' => [
+                '762' => $STATUS_ID,
+                '768' => $CATEGORY_ID,
+                '779' => $DEADLINE,
+                '776' => $USER_ID,
+                '777' => $arPerformerUsersFull['id'],
+                '778' => $CATEGORY_ID == 23949486 ? $ACCOUNTANT_ID : $arControllerUsersFull['id'],
+                //'778' => $arControllerUsersFull['id'],
+                '775' => ($arManagerUsersFull['id'])?$arManagerUsersFull['id']:$arControllerUsersFull['id'],
+                '772' => $arRoute["PREVIEW_TEXT"],
+                '774' => $depId,
+                '780' => $arWatchUsersFullID,
+            ]
+        ];
+
+        $bBizproc = \CModule::IncludeModule("bizproc") && ($arIBlock["BIZPROC"] != "N");
+
+//---BP---
+        if($bBizproc)
+        {
+            $DOCUMENT_TYPE = "iblock_".$IBLOCK_ID;
+
+            $arDocumentStates = \CBPDocument::GetDocumentStates(
+                array("iblock", "CIBlockDocument", $DOCUMENT_TYPE),
+                ($arResult["ELEMENT_ID"] > 0) ? array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"]) : null,
+                "Y"
+            );
+
+            $arCurrentUserGroups = $GLOBALS["USER"]->GetUserGroupArray();
+            if(!$arResult["ELEMENT_FIELDS"] || $arResult["ELEMENT_FIELDS"]["CREATED_BY"] == $GLOBALS["USER"]->GetID())
+            {
+                $arCurrentUserGroups[] = "Author";
+            }
+
+            if($arResult["ELEMENT_ID"])
+            {
+                $canWrite = \CBPDocument::CanUserOperateDocument(
+                    \CBPCanUserOperateOperation::WriteDocument,
+                    $GLOBALS["USER"]->GetID(),
+                    array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"]),
+                    array("AllUserGroups" => $arCurrentUserGroups, "DocumentStates" => $arDocumentStates)
+                );
+            }
+            else
+            {
+                $canWrite = \CBPDocument::CanUserOperateDocumentType(
+                    \CBPCanUserOperateOperation::WriteDocument,
+                    $GLOBALS["USER"]->GetID(),
+                    array("iblock", "CIBlockDocument", $DOCUMENT_TYPE),
+                    array("AllUserGroups" => $arCurrentUserGroups, "DocumentStates" => $arDocumentStates)
+                );
+            }
+
+            if(!$canWrite)
+                $strError = GetMessage("CC_BLEE_ACCESS_DENIED_STATUS");
+        }
+
+        if(!$strError)
+        {
+            if($bBizproc)
+            {
+                $arBizProcParametersValues = array();
+                foreach ($arDocumentStates as $arDocumentState)
+                {
+                    if(strlen($arDocumentState["ID"]) <= 0)
+                    {
+                        $arErrorsTmp = array();
+
+                        $arBizProcParametersValues[$arDocumentState["TEMPLATE_ID"]] = \CBPDocument::StartWorkflowParametersValidate(
+                            $arDocumentState["TEMPLATE_ID"],
+                            $arDocumentState["TEMPLATE_PARAMETERS"],
+                            array("iblock", "CIBlockDocument", $DOCUMENT_TYPE),
+                            $arErrorsTmp
+                        );
+
+                        foreach($arErrorsTmp as $e)
+                            $strError .= $e["message"]."<br />";
+                    }
+                }
+            }
+        }
+
+        if(!$strError)
+        {
+            $obElement = new \CIBlockElement;
+
+            if($arResult["ELEMENT_ID"])
+            {
+                $res = $obElement->Update($arResult["ELEMENT_ID"], $arElement, false, true, true);
+                if(!$res)
+                    $strError = $obElement->LAST_ERROR;
+            }
+            else
+            {
+                $res = $obElement->Add($arElement, false, true, true);
+                if ($res && $copy_id > 0) {
+                    $approveUsers = array('');
+                    foreach($arResult['FIELDS'] as $field) {
+                        if (
+                            in_array($field['CODE'], array('APPROVEUSERS1', 'APPROVEUSERS2', 'APPROVEUSERS3'))
+                            && isset($arElement['PROPERTY_VALUES'][$field['ID']])
+                        ) {
+                            $approveUsers[$field['CODE']] = $arElement['PROPERTY_VALUES'][$field['ID']];
+                        }
+                    }
+
+                    $hlblock   = HL\HighloadBlockTable::getById(1)->fetch();
+                    $entity   = HL\HighloadBlockTable::compileEntity( $hlblock );
+                    $entity_data_class = $entity->getDataClass();
+                    if (!empty($approveUsers)) {
+                        $saveApproveUsers = array();
+                        $filterIds = array_merge((array)$approveUsers['APPROVEUSERS1'], (array)$approveUsers['APPROVEUSERS2'], (array)$approveUsers['APPROVEUSERS3']);
+                        $rsApproves = $entity_data_class::getList(array(
+                            "filter" => array(
+                                "ID" => $filterIds
+                            ),
+                        ));
+
+                        while ($arApproveUser = $rsApproves->Fetch()) {
+                            $id = $arApproveUser['ID'];
+                            $arApproveUser['UF_DECISION'] = "";
+                            $arApproveUser['UF_DOC'] = $res;
+                            unset($arApproveUser['ID']);
+                            $resHl = $entity_data_class::add($arApproveUser);
+                            foreach($approveUsers as $key => $val) {
+                                if (in_array($id, (array)$approveUsers[$key])) {
+                                    $saveApproveUsers[$key][] = $resHl->getId();
+                                }
+                            }
+                        }
+                        \CIBlockElement::SetPropertyValuesEx($res, $arElement['IBLOCK_ID'], $saveApproveUsers);
+                    }
+                }
+
+                if($res){
+                    $arResult["ELEMENT_ID"] = $res;
+                    //file_put_contents("/home/bitrix/www/local/modules/bsi.wt/lib/log.workfolowrest.txt", PHP_EOL . 'OK', FILE_APPEND);
+
+                }else{
+                    $strError = $obElement->LAST_ERROR;
+                    file_put_contents("/home/bitrix/www/local/modules/bsi.wt/lib/log.workfolowrest.txt", PHP_EOL . "ФИО - $USER_FULL_NAME, задание task_id = $TASK_ID, ошибка - " . $strError, FILE_APPEND);
+                }
+            }
+
+            /*
+            waiting for integration lists into events_user_view
+
+                        if($res && !empty($arParams['SOCNET_GROUP_ID']))
+                        {
+                            $arSoFields = Array(
+                                "ENTITY_TYPE" 		=> SONET_SUBSCRIBE_ENTITY_GROUP,
+                                "ENTITY_ID" 		=> intval($arParams["SOCNET_GROUP_ID"]),
+                                "EVENT_ID" 			=> "lists",
+                                "USER_ID" 			=> $GLOBALS["USER"]->GetID(),
+                                "=LOG_DATE" 		=> $GLOBALS["DB"]->CurrentTimeFunction(),
+                                "TITLE_TEMPLATE" 	=> GetMessage("CC_BLEE_SONET_LOG_TITLE_TEMPLATE"),
+                                "TITLE" 			=> $arFields["NAME"],
+                                "MESSAGE" 			=> "",
+                                "TEXT_MESSAGE" 		=> "",
+                                "MODULE_ID" 		=> "lists",
+                                "URL"				=> str_replace(
+                                                        array("#group_id#", "#list_id#", "#section_id#", "#element_id#"),
+                                                        array($arParams["SOCNET_GROUP_ID"], $arResult["IBLOCK_ID"], intval($_POST["IBLOCK_SECTION_ID"]), intval($arResult["ELEMENT_ID"])),
+                                                        $arParams["~LIST_ELEMENT_URL"]
+                                                    ),
+                                "CALLBACK_FUNC" 	=> false
+                            );
+
+                            $logID = CSocNetLog::Add($arSoFields, false);
+
+                            if (intval($logID) > 0)
+                                CSocNetLog::Update($logID, array("TMP_ID" => $logID));
+
+                            CSocNetLog::SendEvent($logID, "SONET_NEW_EVENT", $logID);
+                        }
+            */
+        }
+
+        if(!$strError)
+        {
+            \LOL\Workflow\Rights::setFileRights($arResult["IBLOCK_ID"], $arResult["ELEMENT_ID"]);
+        }
+
+
+        if($bBizproc)
+        {
+            if(!$strError /*&& isset($_POST["save"])*//* && !$arResult["IS_APPROVING"]*/)
+            {
+
+                /*$arStates=CBPDocument::GetDocumentStates(
+                        array("iblock", "CIBlockDocument", "type_".$arResult["IBLOCK_ID"]),
+                        array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"])
+                );
+
+                foreach($arStates as $arState)
+                {
+                    $runtime = CBPRuntime::GetRuntime();
+                    try
+                    {
+                        $persister = CBPWorkflowPersister::GetPersister();
+                        $rootActivity = $persister->LoadWorkflow($arState["ID"]);
+
+                        $persister->UnlockWorkflow($rootActivity);
+
+                        CBPDocument::TerminateWorkflow(
+                            $arState["ID"],
+                            array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"]),
+                            $arErrorsTmp
+                        );
+
+                    }
+                    catch(Exception $e){
+                        //
+                    }
+                }*/
+
+                \CBPDocument::OnDocumentDelete(array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"]), $arErrors);
+
+
+
+                $arBizProcWorkflowId = array();
+                foreach($arDocumentStates as $arDocumentState)
+                {
+                    if(strlen($arDocumentState["ID"]) <= 0)
+                    {
+                        $arErrorsTmp = array();
+
+                        $arBizProcWorkflowId[$arDocumentState["TEMPLATE_ID"]] = \CBPDocument::StartWorkflow(
+                            $arDocumentState["TEMPLATE_ID"],
+                            array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"]),
+                            array_merge($arBizProcParametersValues[$arDocumentState["TEMPLATE_ID"]], array("TargetUser" => "user_".intval($GLOBALS["USER"]->GetID()))),
+                            $arErrorsTmp
+                        );
+
+                        foreach($arErrorsTmp as $e)
+                            $strError .= $e["message"]."<br />";
+                    }
+                }
+            }
+
+            if(!$strError)
+            {
+                $bizprocIndex = 1;
+                if($bizprocIndex > 0)
+                {
+                    for($i = 1; $i <= $bizprocIndex; $i++)
+                    {
+                        $bpId = trim($_REQUEST["bizproc_id_".$i]);
+                        $bpTemplateId = intval($_REQUEST["bizproc_template_id_".$i]);
+                        $bpEvent = trim($_REQUEST["bizproc_event_".$i]);
+
+                        if(strlen($bpEvent) > 0)
+                        {
+                            if(strlen($bpId) > 0)
+                            {
+                                if(!array_key_exists($bpId, $arDocumentStates))
+                                    continue;
+                            }
+                            else
+                            {
+                                if(!array_key_exists($bpTemplateId, $arDocumentStates))
+                                    continue;
+                                $bpId = $arBizProcWorkflowId[$bpTemplateId];
+                            }
+
+                            $arErrorTmp = array();
+                            \CBPDocument::SendExternalEvent(
+                                $bpId,
+                                $bpEvent,
+                                array("Groups" => $arCurrentUserGroups, "User" => $GLOBALS["USER"]->GetID()),
+                                $arErrorTmp
+                            );
+
+                            foreach ($arErrorsTmp as $e)
+                                $strWarning .= $e["message"]."<br />";
+                        }
+                    }
+                }
+
+                $arDocumentStates = null;
+                \CBPDocument::AddDocumentToHistory(array("iblock", "CIBlockDocument", $arResult["ELEMENT_ID"]), $arElement["NAME"], $GLOBALS["USER"]->GetID());
+            }
+        }
+
+        return ['NAME' => $data['NAME'],'ID' => $arResult["ELEMENT_ID"],'CATEGORY_NAME' => $CATEGORY_NAME];
+    }
+
+}

@@ -4,7 +4,6 @@ namespace App\Modules\BusinessTrip\Action;
 
 class TransferAction {
     public static function setCity($model, $data){
-        $model->id          = $data->ID;
         $model->name        = $data->NAME;
         $model->region      = $data->REGION;
         $model->population  = $data->POPULATION;
@@ -15,9 +14,9 @@ class TransferAction {
     }
 
     public static function setTarget($model, $data){
-        $model->id           = $data->ID;
         $model->name         = $data->NAME;
         $model->description  = $data->DESCRIPTION;
+        $model->user_id      = 1;
 
         if($data->ACTIVE == 'Y') $model->active = 1; else $model->active = 0;
         $model->save();

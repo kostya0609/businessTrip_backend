@@ -20,15 +20,22 @@ class SearchController extends Controller {
 
     public function city(Request $request){
         $str = $this->trimStr($request->q);
+        $limit = $request->limit ?: 10;
+        $population =$request->population ?: 0;
+
 
         $result = City::where('active',1)
             ->where('name','like','%'.$str.'%')
-            ->limit(10)
+            ->limit($limit)
             ->get();
 
         $cities = [];
         foreach ($result as $el){
-            $cities[] = ['value' => $el->id, 'label' => trim($el->name . ' (' . $el->region . ')')];
+            $cities[] = [
+                'value'      => $el->id,
+                'label'      => trim($el->name . ' (' . $el->region . ')'),
+                'population' => $population ? $el->population : '',
+            ];
         }
         return response()->json(['status' => 'success', 'data' => $cities]);
     }
@@ -50,7 +57,7 @@ class SearchController extends Controller {
 
     public function user(Request $request){
         $to_str = explode(' ',$this->trimStr($request->q));
-        $result = User::where('ACTIVE','Y')->where(function ($query) use ($to_str){
+        $result = User::where('ACTIVE','Y')->where('ID', '!=', 1)->where(function ($query) use ($to_str){
             foreach ($to_str as $word){
                 if(!empty($word)){
                     $query->where(DB::raw('CONCAT_WS(LAST_NAME, " ", NAME, " ", SECOND_NAME)'),'like','%'.$word.'%');
@@ -96,7 +103,7 @@ class SearchController extends Controller {
                     }
                 }
             })
-            ->limit(10)
+            ->limit(20)
             ->get();
 
         $data = $result->map(function($el){

@@ -51,21 +51,7 @@ class Filter {
                 }
                 case 'list' || 'searchList':
                 {
-                    //костыль
-                    if($key == 'period_month')
-                    {
-                        $model = $model->where('period_type','=', 'month')->whereIn('period_value', $value['value']);
-                    }
-                    elseif($key == 'period_quarter')
-                    {
-                        $model = $model->where('period_type','=', 'quarter')->whereIn('period_value', $value['value']);
-                    }
-                    //конец костыля
-                    else
-                    {
-                        $model = $model->whereIn($key, $value['value']);
-                    }
-
+                    $model = $model->whereIn($key, $value['value']);
                     break;
                 }
             }
