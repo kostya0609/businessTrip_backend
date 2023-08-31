@@ -486,7 +486,7 @@ class TaskController extends Controller {
         return response()->json(['status' => 'success', 'message' => 'Успешно']);
 
         }catch (\Exception $e){
-            DB::rollBack();
+            file_put_contents("/home/bitrix/ext_www/api.bsi.local/app/Modules/BusinessTrip/Files/Logs/logs.txt", 'Ошибка при изменении статуса - '.$e->getMessage(), FILE_APPEND);
             return response()->json(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }

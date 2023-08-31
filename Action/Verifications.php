@@ -20,7 +20,7 @@ class Verifications{
 
     public static function allUsers():Collection{
         return DB::table('b_user')
-            ->where('ACTIVE', '=', 'Y')
+            //->where('ACTIVE', '=', 'Y')
             ->join('b_utm_user', 'b_user.ID', '=', 'b_utm_user.VALUE_ID')
             ->select('b_user.ID','b_user.ACTIVE', 'b_user.NAME', 'b_user.LAST_NAME',
                 'b_user.SECOND_NAME', 'b_user.XML_ID', 'b_utm_user.VALUE_INT as DEPARTMENT')

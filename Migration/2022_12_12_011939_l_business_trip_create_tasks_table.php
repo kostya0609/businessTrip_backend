@@ -28,6 +28,7 @@ class CreateLBusinessTripTasks extends Migration {
             $table->float('gasoline')->nullable();
             $table->integer('back_distance')->nullable();
             $table->text('document_link')->nullable();
+            $table->boolean('work_follow_run')->nullable();
             $table->text('cancel_comment')->nullable();
             $table->timestamps();
         });

@@ -7,11 +7,13 @@ use App\Modules\BusinessTrip\Model\CostUnit;
 
 use App\Modules\BusinessTrip\Model\City;
 use App\Modules\BusinessTrip\Model\Department;
+use App\Modules\BusinessTrip\Model\Role;
 use App\Modules\BusinessTrip\Model\User;
 use App\Modules\BusinessTrip\Model\Company;
 
 use App\Modules\BusinessTrip\Model\TaskDot;
 use App\Modules\BusinessTrip\Model\TaskTarget;
+use Illuminate\Support\Facades\DB;
 
 class TaskAction {
     public static function setTask($model, $data){
@@ -172,6 +174,7 @@ class TaskAction {
             ['name' => 'Причина аннулирования', 'value' => $cancel_comment ?: '-'],
         ];
 
+        $over_budget_approving = [];
         if($over_budget){
             $over_budget = '-';
             foreach ($model->files as $file){
@@ -187,7 +190,9 @@ class TaskAction {
             ];
 
             $task = array_merge($task, $over_budget);
-
+            //ниже получить id всех юристов
+            $role_id = Role::where('name', '=', 'over_budget')->value('id');
+            $over_budget_approving = DB::table('l_business_trip_role_user')->where('role_id',$role_id)->pluck('user_id')->toArray();
         }
 
 
@@ -347,19 +352,20 @@ class TaskAction {
         ];
 
         return [
-            'status'            => $model->status,
-            'count_days'        => $count_days,
-            'auto_travel'       => $model->auto_travel,
-            'over_budget'       => $model->over_budget,
-            'task'              => $task,
-            'dots'              => $dots_to_send,
-            'route_sheet'       => $route_sheet,
-            'estimate'          => $estimate,
-            'total_estimate'    => round($total_estimate, 2),
-            'data_link_doc'     => $data_link_doc,
-            'additional_files'  => $additional_files,
-            'plan_report_not'   => $plan_report_not,
-            'full_access'       => $full_access,
+            'status'                => $model->status,
+            'count_days'            => $count_days,
+            'auto_travel'           => $model->auto_travel,
+            'over_budget'           => $model->over_budget,
+            'over_budget_approving' => $over_budget_approving,
+            'task'                  => $task,
+            'dots'                  => $dots_to_send,
+            'route_sheet'           => $route_sheet,
+            'estimate'              => $estimate,
+            'total_estimate'        => round($total_estimate, 2),
+            'data_link_doc'         => $data_link_doc,
+            'additional_files'      => $additional_files,
+            'plan_report_not'       => $plan_report_not,
+            'full_access'           => $full_access,
         ];
     }
 }

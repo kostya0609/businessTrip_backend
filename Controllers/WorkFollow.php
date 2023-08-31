@@ -23,7 +23,7 @@ class WorkFollow extends Controller {
 
         $taskModel = Task::with(['dots.city'])->find($task_id);
 
-        if($taskModel->document_link)
+        if($taskModel->work_follow_run)
             return response()->json(['status' => 'success', 'message' => 'Успешно']);
 
         $USER_ID        = $taskModel->responsible_id;
@@ -64,6 +64,10 @@ class WorkFollow extends Controller {
         ];
 
         try {
+            //ключ того что начат процесс создания поручений в битриксе
+            $taskModel->work_follow_run = 1;
+            $taskModel->save();
+
             $set_work_follow = Http::withOptions(['verify' => false])->withHeaders([
                 'Authorization' => 'Basic cmVzdDpSRVNUcmVzdCEhIQ==',
             ])->post($url, $TASK_DATA);
@@ -80,6 +84,10 @@ class WorkFollow extends Controller {
                 $taskModel->responsible_id,
                 $logMessage
             );
+
+            //ключ того что закончен процесс создания поручений в битриксе
+            $taskModel->work_follow_run = 0;
+            $taskModel->save();
 
             return response()->json(['status' => 'success', 'message' => 'Успешно', 'data'=> $set_work_follow]);
 
